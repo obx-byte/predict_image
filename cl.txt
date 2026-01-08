@@ -682,3 +682,89 @@ If you rotate one image 360 times, the AI might still overfit because the **ligh
 4. **Result:** Your 40 images become **960 images**. The crack will now appear at every possible "clock position" on the gear.
 
 **Would you like me to write a full script that loops through your folder and does this for all 40 images automatically?**
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Since you have **40 images** and you want to rotate them in "small steps" (like every 10 or 15 degrees) to cover all positions, doing this **manually in LabelImg is a bad idea.**
+
+It would take you hours to label 400+ images, and humans make mistakes. The **Automatic Way** is much better because the computer can calculate the new coordinates perfectly.
+
+---
+
+### 1. The Manual Way (Not Recommended)
+
+* **Process:** You rotate the image in Photoshop/OpenCV, save it, open it in LabelImg, and draw a new box.
+* **Problem:** If you rotate 40 images into 400, you have to draw 400 boxes. If the boxes aren't perfectly centered on the crack every time, the AI will get confused.
+
+### 2. The Automatic Way (Recommended)
+
+* **Process:** You label your **original 40 images** once in LabelImg. Then, you use a Python script to "spin" the image and the coordinates together.
+* **Why it's better:** The box follows the crack mathematically. It is 100% accurate.
+
+---
+
+### 3. How to do the Automatic Way
+
+You can use a library called **Albumentations**. It is the industry standard for this. It takes your image and your LabelImg `.txt` file and rotates them both at the same time.
+
+**Here is the "Automatic" Logic:**
+
+1. Label your 40 images in LabelImg (put them in a folder called `images` and labels in `labels`).
+2. Run a script that says: "For every image, rotate it 10 degrees, 20 degrees, 30 degrees... up to 360."
+3. The script saves the new images and the new `.txt` files automatically.
+
+---
+
+### 4. Code to do it Automatically
+
+You don't need to be a master programmer to use this. This script uses the `albumentations` library to do exactly what you want:
+
+```python
+import albumentations as A
+import cv2
+import os
+
+# Define the "Small Step" rotation (e.g., 15 degrees)
+transform = A.Compose([
+    A.SafeRotate(limit=(15, 15), p=1.0), # Rotates exactly 15 degrees
+], bbox_params=A.BboxParams(format='yolo'))
+
+# 1. Load your original image and label
+image = cv2.imread("gear_01.jpg")
+# Read your YOLO txt file: [class, x, y, w, h]
+bboxes = [[0, 0.5, 0.5, 0.1, 0.1]] 
+
+# 2. Apply the rotation
+transformed = transform(image=image, bboxes=bboxes)
+
+# 3. Save the new "Automatic" data
+cv2.imwrite("gear_01_rotated_15.jpg", transformed['image'])
+with open("gear_01_rotated_15.txt", "w") as f:
+    for box in transformed['bboxes']:
+        f.write(f"{int(box[0])} {box[1]} {box[2]} {box[3]} {box[4]}")
+
+```
+
+---
+
+### 5. Why "SafeRotate" is important for gears
+
+When you rotate a square image, the corners often get cut off. Since your gears are circular, you must use **SafeRotate**. This ensures that even if the gear spins, the crack stays inside the picture and the coordinates don't go "outside" the 0.0 to 1.0 range.
+
+### Which way would you prefer?
+
+* **If you want to use the Manual Way:** I can show you how to use **Roboflow**. You upload 40 images, and it has a button to "Generate 10x Augmentations" automatically.
+* **If you want to use the Automatic Python Way:** I can give you a full script that you can just copy and run on your computer to process all 40 images in seconds.
+
+**Would you like the full Python script for all 40 images, or would you like to see how to do it in Roboflow without coding?**

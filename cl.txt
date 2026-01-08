@@ -604,3 +604,81 @@ By training with precise masks, you teach the AI to ignore the "fuzzy" edges of 
 4. **Set `mosaic=0`:** If your images are very messy (oil/threads), sometimes Mosaic confuses the model. Turn it off for the last 20 epochs of training.
 
 **Would you like me to help you write a script that converts your 40 green images into high-contrast grayscale to make the cracks easier to see?**
+
+
+
+
+
+
+
+
+
+This is the **smartest way** to use your 40 images. By rotating the gear in small steps (e.g., every 5 or 10 degrees), you can turn 1 photo into 36 or 72 different photos.
+
+However, you are right: **if you rotate the image, the coordinates must change too.** If you don't update the coordinates, the AI will look at the "old" spot where there is no crack.
+
+### 1. How to "Step-Rotate" correctly
+
+If you rotate the image by **10 degrees**, the crack moves in a circle. To generate the new `.txt` files automatically, you need to use a **Rotation Matrix**.
+
+### 2. Python Script to Rotate Image + Labels
+
+Instead of doing this manually (which is impossible for 400+ images), you can use this script. It takes your image and your YOLO `.txt` file, rotates them both, and saves the new ones.
+
+```python
+import cv2
+import numpy as np
+import math
+
+def rotate_yolo_bbox(center_x, center_y, width, height, angle_deg, img_w, img_h):
+    # Convert degrees to radians
+    angle_rad = math.radians(-angle_deg) 
+    
+    # 1. Convert normalized to pixel coordinates
+    px_x = center_x * img_w
+    px_y = center_y * img_h
+    
+    # 2. Shift origin to image center
+    cx, cy = img_w / 2, img_h / 2
+    temp_x = px_x - cx
+    temp_y = px_y - cy
+    
+    # 3. Apply rotation matrix
+    rotated_x = temp_x * math.cos(angle_rad) - temp_y * math.sin(angle_rad)
+    rotated_y = temp_x * math.sin(angle_rad) + temp_y * math.cos(angle_rad)
+    
+    # 4. Shift back and normalize
+    new_x = (rotated_x + cx) / img_w
+    new_y = (rotated_y + cy) / img_h
+    
+    return new_x, new_y, width, height # Width/Height stay same for small rotations
+
+# EXAMPLE: Rotate 10 degrees
+# new_coords = rotate_yolo_bbox(0.8, 0.5, 0.1, 0.1, 10, 1920, 1080)
+
+```
+
+### 3. Will the "Box" still fit?
+
+When you rotate a gear (a circle), the crack rotates perfectly. But a **Bounding Box** stays a horizontal rectangle.
+
+* **The Problem:** If you rotate 45 degrees, a vertical crack becomes diagonal. A horizontal box will no longer "tightly" fit a diagonal crack.
+* **The Solution:** Use **YOLOv8-Segmentation** (Polygons). Polygons rotate perfectly because every single point is recalculated. If you use boxes, the boxes will get "fatter" and include more background noise (the oil/threads).
+
+---
+
+### 4. Important: Don't rotate too much from one image
+
+If you rotate one image 360 times, the AI might still overfit because the **lighting** never changes.
+
+* **Best Mix:** Take 10 frames from your video  Rotate each of those 10 frames by 0°, 90°, 180°, and 270°.
+* This gives you **40 variations** with different light reflections.
+
+### 5. Summary of your "Small Step" plan:
+
+1. **Select your best image** (where the crack is clearest).
+2. **Rotate in 15° steps** (24 images per 1 original).
+3. **Update `.txt` files** using the math above.
+4. **Result:** Your 40 images become **960 images**. The crack will now appear at every possible "clock position" on the gear.
+
+**Would you like me to write a full script that loops through your folder and does this for all 40 images automatically?**

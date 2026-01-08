@@ -495,3 +495,112 @@ Threads and cracks look the same when the camera is far away. But when you zoom 
 4. **Confidence Threshold:** When testing, set your threshold to `conf=0.6`. This forces the AI to only show boxes when it is "very sure" the texture matches a real crack.
 
 **Would you like me to show you the best way to "trace" (annotate) these difficult cracks so the AI can tell them apart from threads?**
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+This is the most difficult part of **Magnetic Particle Inspection (MPI)**. When you apply the "bath" (oil/water and powder), the liquid creates surface tension that fills the **threads** and pools around the **cracks**, making them both look like identical glowing blobs.
+
+If the "shape" of the crack is hidden by the liquid, the AI cannot use geometry alone. You have to change how you **capture the data** and how the **AI processes the light**.
+
+---
+
+## 1. Why "Wet" Inspection is Hard for AI
+
+When the gear is too wet:
+
+* **The "Bridge" Effect:** The oil/water creates a bridge over the crack, making a thin jagged line look like a wide, smooth thread.
+* **Specular Reflection:** The UV light reflects off the oil, creating "hotspots" that look like cracks but are just glare.
+
+---
+
+## 2. The Solution: Use "Contrastive" Training
+
+Since the visual shape fails, the AI needs to look at **Intensity** and **Edge Sharpness**. Even in oil, a real crack usually has a "brighter core" than a thread because it has more depth to hold the magnetic particles.
+
+### Strategy A: The "Pre-Dry" Image
+
+If possible, take your photos **2–3 seconds after** the liquid is poured, once the excess oil has drained but the particles are still stuck to the crack. This is when the contrast is highest.
+
+### Strategy B: Heatmap (Saliency) Training
+
+Instead of just showing the AI the final image, use a "High-Pass Filter" to remove the "fat" blobs of oil and keep the "thin" centers.
+
+**Python script to remove "Oil Blobs" and keep "Crack Cores":**
+
+```python
+import cv2
+import numpy as np
+
+# Load the oily MPI image
+img = cv2.imread('oily_gear.jpg', 0)
+
+# Use a Median Blur to find the 'Oil Blobs'
+bg = cv2.medianBlur(img, 21)
+
+# Subtract the background oil from the original image
+# This leaves only the 'Sharp' edges (the crack)
+diff = cv2.absdiff(img, bg)
+
+# Enhance the difference
+enhanced = cv2.multiply(diff, 2.0)
+cv2.imwrite('clean_crack.jpg', enhanced)
+
+```
+
+---
+
+## 3. How to train the AI with "Failing Shapes"
+
+If the shape is failing, you must use **Negative Training Samples** from the "Wet" process.
+
+1. **Label the "Oil Threads":** Take images of a wet gear with NO cracks. Feed these to YOLO and tell it these are **Background**.
+2. **Use "Mixup" Augmentation:** This is a YOLO setting that blends two images together. It helps the AI learn to see a crack even when it is buried under the "glow" of a thread.
+3. **Use Grayscale + 1-Channel:** Since the color (green) is the same for everything, color actually **confuses** the AI. Converting your 40 images to **Grayscale** forces the AI to look at the **gradient** (how fast the light changes) instead of the color.
+
+---
+
+## 4. Why YOLOv8-Seg is still the best
+
+Even when the shape is messy, a "Mask" (segmentation) is better than a "Box."
+
+* A **Box** says: "There is a crack somewhere in this square." (The square includes the oil and threads).
+* A **Mask** says: "These specific pixels are the crack."
+
+By training with precise masks, you teach the AI to ignore the "fuzzy" edges of the oil and only look at the "solid" center of the crack.
+
+---
+
+## 5. Your Final Checklist for "Oily" Gears
+
+1. **Dry the gear slightly:** If the oil is too thick, no AI can see through it.
+2. **Use 10 "Wet Background" images:** Show the AI what a wet gear without cracks looks like.
+3. **Train in Grayscale:** Remove the green color to focus on texture.
+4. **Set `mosaic=0`:** If your images are very messy (oil/threads), sometimes Mosaic confuses the model. Turn it off for the last 20 epochs of training.
+
+**Would you like me to help you write a script that converts your 40 green images into high-contrast grayscale to make the cracks easier to see?**

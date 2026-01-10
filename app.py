@@ -1,10 +1,14 @@
+import glob
+import os
 import socket
 import sys
-from datetime import datetime, time
 import tempfile
+from datetime import datetime, time
+
 import cv2
 import psycopg2
 from openpyxl import Workbook
+from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import PatternFill
 from PySide6.QtCore import QDate, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QImage, QPixmap
@@ -27,12 +31,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from datetime import datetime, time
 
-from openpyxl import Workbook
-from openpyxl.styles import PatternFill
-from openpyxl.drawing.image import Image as XLImage
-from PySide6.QtWidgets import QFileDialog
+IMAGE_DIR = r"C:\Users\Admin\Documents\dist\images"
 
 
 # ===================Helper Function============
@@ -106,9 +106,6 @@ class FHVSocketThread(QThread):
 
     def _handle_client(self, conn):
 
-
-
-
         while self.running:
             if self.blocked:
                 self.msleep(50)
@@ -134,8 +131,8 @@ class FHVSocketThread(QThread):
 
                 print(msg)
                 print(len(msg))
-               # STRICT FORMAT CHECK
-                if (len(msg) == 7):
+                # STRICT FORMAT CHECK
+                if len(msg) == 7:
                     print(" VALID DATA:", msg)
                     self.waiting_for_user = True
                     self.data_received.emit(msg)
@@ -147,10 +144,9 @@ class FHVSocketThread(QThread):
                         continue
 
                     now = time.time()
-                    if now - self.last_invalid_ts > 2:   # debounce 2 sec
+                    if now - self.last_invalid_ts > 2:  # debounce 2 sec
                         self.last_invalid_ts = now
                         self.invalid_detected.emit()
-
 
             except socket.timeout:
                 continue
@@ -175,12 +171,10 @@ class FHVSocketThread(QThread):
         self.waiting_for_user = True
         self.blocked = True
 
-
     def resume(self):
         print(" Socket resumed")
         self.waiting_for_user = False
         self.blocked = False
-
 
     def stop(self):
         print(" Socket stopped")
@@ -203,13 +197,12 @@ def batch_serial_exists(batch, serial):
         WHERE unique_no = %s AND serial_no = %s
         LIMIT 1
         """,
-        (batch, serial)
+        (batch, serial),
     )
     exists = cur.fetchone() is not None
     cur.close()
     conn.close()
     return exists
-
 
 
 def init_db():
@@ -227,7 +220,9 @@ def init_db():
             unique_no TEXT,
             status TEXT,
             time TIMESTAMP,
-            image BYTEA
+            image BYTEA,
+            front_image BYTEA,
+            back_image BYTEA
         )
     """
     )
@@ -237,15 +232,15 @@ def init_db():
 
 
 # ================= DB SAVE =================
-def save_record(data, status, img_bytes):
+def save_record(data, status, img_bytes, front_img, back_img):
     conn = psycopg2.connect(**DB)
     cur = conn.cursor()
     cur.execute(
         f"""
         INSERT INTO {TABLE}
         (employee_id, work_order, charge_no, serial_no,
-         part_no, unique_no, status, time, image)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+         part_no, unique_no, status, time, image, front_image, back_image)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
     """,
         (
             data["emp"],
@@ -257,6 +252,8 @@ def save_record(data, status, img_bytes):
             status,
             datetime.now(),
             psycopg2.Binary(img_bytes),
+            psycopg2.Binary(front_img),
+            psycopg2.Binary(back_img),
         ),
     )
     conn.commit()
@@ -272,7 +269,7 @@ def fetch_report(from_dt, to_dt, status, unique_no=None, limit=None, offset=None
     q = f"""
         SELECT employee_id, work_order, charge_no,
                serial_no, part_no, unique_no,
-               image, status, time
+               image,front_image, back_image, status, time
         FROM {TABLE}
         WHERE time BETWEEN %s AND %s
     """
@@ -501,8 +498,6 @@ class Operator(QWidget):
     EMP_LEN = 10
     WO_LEN = 10
 
-
-
     def retry_scan(self):
         print("Retry scan clicked")
 
@@ -523,15 +518,11 @@ class Operator(QWidget):
         TextToast("Waiting for gear in position", self).show_bottom()
         self.reset_batch_serial_style()
 
-
-
     def __init__(self):
         super().__init__()
         self.camera_paused = False
         self.inspection_active = False
         self.duplicate_detected = False
-
-
 
         # ---- Dark UI, clean inputs ----
         self.setStyleSheet(
@@ -567,9 +558,8 @@ class Operator(QWidget):
 
         top = QHBoxLayout()
         top.addStretch()
-        top.addWidget(self.btn_retry)    # 👈 new button
+        top.addWidget(self.btn_retry)  # 👈 new button
         top.addWidget(self.btn_refresh)
-
 
         # ---- Employee & Work Order ----
 
@@ -585,9 +575,6 @@ class Operator(QWidget):
         """
         self.emp.setStyleSheet(normal)
         self.wo.setStyleSheet(normal)
-
-
-
 
         self.emp.returnPressed.connect(self.emp_done)
         self.wo.returnPressed.connect(self.wo_done)
@@ -636,7 +623,6 @@ class Operator(QWidget):
         self.preview.setMinimumHeight(420)
         self.preview.setStyleSheet("background:black;color:white;")
 
-
         self.preview_dialog = None
 
         self.timer = QTimer(self)
@@ -652,12 +638,7 @@ class Operator(QWidget):
 
     def mark_all_green(self):
         for _, le, _ in self.inputs.values():
-            le.setStyleSheet(
-                "background:#1b5e20;color:white;border:2px solid #2ecc71;"
-            )
-
-
-
+            le.setStyleSheet("background:#1b5e20;color:white;border:2px solid #2ecc71;")
 
     def mark_all_red(self):
         for _, le, _ in self.inputs.values():
@@ -680,7 +661,7 @@ class Operator(QWidget):
     def show_ok_notok_dialog(self):
         dlg = QDialog(self)
         dlg.setWindowTitle("Inspection Result")
-        dlg.setFixedSize(420, 420)   # medium dialog
+        dlg.setFixedSize(420, 420)  # medium dialog
 
         # -------- Image --------
         img_label = QLabel()
@@ -726,8 +707,6 @@ class Operator(QWidget):
             "background:#7f0000;color:white;border:2px solid #ff4d4d;"
         )
 
-
-
     def reset_batch_serial_style(self):
 
         self.inputs["unique"][1].setStyleSheet(
@@ -736,10 +715,6 @@ class Operator(QWidget):
         self.inputs["serial"][1].setStyleSheet(
             "background:white;color:black;border:1px solid #999;"
         )
-
-
-
-
 
     def final_save(self, status, dlg):
         dlg.close()
@@ -753,7 +728,7 @@ class Operator(QWidget):
             "unique": clean_text(self.inputs["unique"][1].text()),
         }
 
-        save_record(data, status, self.captured_img)
+        save_record(data, status, self.captured_img, self.front_img, self.back_img)
 
         TextToast(f"{status} saved | Batch {data['unique']}", self).show_bottom()
 
@@ -775,37 +750,95 @@ class Operator(QWidget):
 
         self.duplicate_detected = False
 
-
         self.record_saved.emit()
-
-
-
 
     def on_enter_key(self):
         if self.duplicate_detected:
             TextToast(
-                "Duplicate batch not allowed. Scan other gear",
-                self
+                "Duplicate batch not allowed. Scan other gear", self
             ).show_bottom()
-            return
-
-        #  ALWAYS grab a fresh frame
-        frame = self.grab_latest_frame()
-        if frame is None:
-            TextToast("Camera not ready", self).show_bottom()
             return
 
         if not self.all_fields_valid():
             TextToast("Invalid input", self).show_bottom()
             return
 
-        #  Encode fresh frame
-        self.frame = frame
+        # ---- 1. CAPTURE CAMERA IMAGE ----
+        frame = self.grab_latest_frame()
+        if frame is None:
+            TextToast("Camera not ready", self).show_bottom()
+            return
+
         _, buf = cv2.imencode(".jpg", frame)
         self.captured_img = buf.tobytes()
 
+        # ---- 2. CHECK FOLDER FOR MPI IMAGES ----
+        batch = self.inputs["unique"][1].text()
+        serial = self.inputs["serial"][1].text()
+
+        # store pending batch/serial
+        self.pending_batch = batch
+        self.pending_serial = serial
+
+        # start folder polling
+        self.folder_timer = QTimer(self)
+        self.folder_timer.timeout.connect(self.retry_folder_check)
+        self.folder_timer.start(1000)  # check every 1 second
+
+        TextToast("Waiting for MPI images", self).show_bottom()
+
+    def retry_folder_check(self):
+        print("DEBUG: retry_folder_check running")
+
+        front_files = glob.glob(
+            os.path.join(IMAGE_DIR, f"*{self.pending_batch}*{self.pending_serial}*01*")
+        )
+        back_files = glob.glob(
+            os.path.join(IMAGE_DIR, f"*{self.pending_batch}*{self.pending_serial}*02*")
+        )
+
+        if not front_files or not back_files:
+            return
+
+        # stop timer
+        self.folder_timer.stop()
+
+        # load images
+        with open(front_files[0], "rb") as f:
+            self.front_img = f.read()
+
+        with open(back_files[0], "rb") as f:
+            self.back_img = f.read()
+
+        print("DEBUG: MPI images found")
+
         self.show_ok_notok_dialog()
 
+    def check_folder_and_decide(self, batch, serial):
+        # EXPECTED FILE NAMES:
+        # 1100100-01.bmp
+        # 1100100-02.bmp
+
+        front_path = os.path.join(IMAGE_DIR, f"{batch}{serial}-01.jpg")
+        back_path = os.path.join(IMAGE_DIR, f"{batch}{serial}-02.jpg")
+
+        print("DEBUG: checking", front_path, back_path)
+
+        if not os.path.exists(front_path) or not os.path.exists(back_path):
+            TextToast("Waiting for MPI images (01 / 02)", self).show_bottom()
+            return
+
+        # LOAD MPI IMAGES
+        with open(front_path, "rb") as f:
+            self.front_img = f.read()
+
+        with open(back_path, "rb") as f:
+            self.back_img = f.read()
+
+        print("DEBUG: MPI images found")
+
+        # ASK OK / NOT OK
+        self.show_ok_notok_dialog()
 
     def grab_latest_frame(self):
         if not self.cap or not self.cap.isOpened():
@@ -817,12 +850,6 @@ class Operator(QWidget):
         if not ret:
             return None
         return frame
-
-
-
-
-
-
 
     def on_socket_data(self, msg):
         msg = msg.strip()
@@ -847,14 +874,13 @@ class Operator(QWidget):
             TextToast("Batch number is missing", self).show_bottom()
             return
 
-       # ---------- SHOW INPUTS ONLY AFTER WO ----------
-        if self.wo.isHidden():   # WO already entered
+        # ---------- SHOW INPUTS ONLY AFTER WO ----------
+        if self.wo.isHidden():  # WO already entered
             self.wo_done()
         else:
             # WO not entered yet → do nothing
             print("Waiting for Work Order entry")
             return
-
 
         # ---------- FILL INPUTS (FOR BOTH CASES) ----------
         self.inputs["charge"][1].setText(charge)
@@ -870,30 +896,20 @@ class Operator(QWidget):
             self.highlight_batch_serial_red()
 
             TextToast(
-                f"Duplicate detected : Batch {batch_code} / Serial {part_no}",
-                self
+                f"Duplicate detected : Batch {batch_code} / Serial {part_no}", self
             ).show_bottom()
 
             if self.socket_thread:
                 self.socket_thread.pause()
             return
 
-
-
         # ---------- NORMAL FLOW ----------
         self.duplicate_detected = False
         self.mark_all_green()
 
-
-
-
     def bind_enter_keys(self):
         for _, le, _ in self.inputs.values():
-            le.returnPressed.connect(
-                self.on_enter_key,
-                Qt.UniqueConnection
-            )
-
+            le.returnPressed.connect(self.on_enter_key, Qt.UniqueConnection)
 
     def clear_and_resume(self):
         for _, le, _ in self.inputs.values():
@@ -908,15 +924,11 @@ class Operator(QWidget):
         if self.socket_thread:
             self.socket_thread.resume()
 
-
-
     def reset_input_colors(self):
         for _, le, _ in self.inputs.values():
             le.setStyleSheet(
                 "background:transparent;color:white;border:1px solid #555;"
             )
-
-
 
     # ---------- FLOW ----------
     def emp_done(self):
@@ -928,11 +940,7 @@ class Operator(QWidget):
     def on_invalid_gear(self):
         # Show only after work order entered
         if self.wo.isHidden():
-            TextToast(
-                "Gear not detected or number not in position",
-                self
-            ).show_bottom()
-
+            TextToast("Gear not detected or number not in position", self).show_bottom()
 
     def on_enter(self):
         print("Operator screen entered")
@@ -940,14 +948,11 @@ class Operator(QWidget):
         if self.socket_thread is None:
             self.socket_thread = FHVSocketThread()
             self.socket_thread.data_received.connect(self.on_socket_data)
-            self.socket_thread.invalid_detected.connect(
-            self.on_invalid_gear
-            )
+            self.socket_thread.invalid_detected.connect(self.on_invalid_gear)
 
             self.socket_thread.start()
         else:
             self.socket_thread.resume()
-
 
     def wo_done(self):
 
@@ -963,11 +968,6 @@ class Operator(QWidget):
         # focus batch field
         self.inputs["unique"][1].setFocus()
 
-
-
-
-
-
     def validate_field(self, key):
         _, le, ln = self.inputs[key]
 
@@ -979,9 +979,7 @@ class Operator(QWidget):
 
         # length check
         if len(le.text()) != ln:
-            le.setStyleSheet(
-                "background:#7f0000;color:white;border:1px solid #e74c3c;"
-            )
+            le.setStyleSheet("background:#7f0000;color:white;border:1px solid #e74c3c;")
             return
 
         #  UNIQUE (BATCH) DUPLICATE CHECK
@@ -994,21 +992,15 @@ class Operator(QWidget):
                 self.highlight_batch_serial_red()
 
                 TextToast(
-                    f"Duplicate Batch {batch} + Serial {serial}",
-                    self
+                    f"Duplicate Batch {batch} + Serial {serial}", self
                 ).show_bottom()
                 return
             else:
                 self.duplicate_detected = False
-               
-
 
         #  VALID FIELD
 
-        le.setStyleSheet(
-            "background:#1b5e20;color:black;border:1px solid #2ecc71;"
-            )
-
+        le.setStyleSheet("background:#1b5e20;color:black;border:1px solid #2ecc71;")
 
     # ---------- CAMERA ----------
     def start_camera(self):
@@ -1021,7 +1013,6 @@ class Operator(QWidget):
                 return
         self.timer.start(20)
 
-
     def stop_camera(self):
         self.timer.stop()
         if self.cap:
@@ -1031,7 +1022,7 @@ class Operator(QWidget):
 
     def update_frame(self):
         if not self.cap or self.camera_paused:
-            return   #  camera frozen
+            return  #  camera frozen
 
         ret, frame = self.cap.read()
         if not ret:
@@ -1043,7 +1034,6 @@ class Operator(QWidget):
         self.preview.setPixmap(
             QPixmap.fromImage(QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888))
         )
-
 
     # ---------- RESET ----------
     def reset_all(self):
@@ -1073,8 +1063,6 @@ class Operator(QWidget):
             if len(le.text()) != ln:
                 return False
         return True
-
-
 
     def on_leave(self):
         print("Leaving Operator screen")
@@ -1149,7 +1137,7 @@ class Report(QWidget):
         self.total_rows = 0
 
         # ---------- TABLE ----------
-        self.table = QTableWidget(0, 10)
+        self.table = QTableWidget(0, 12)
         self.table.setHorizontalHeaderLabels(
             [
                 "Employee ID",
@@ -1159,6 +1147,8 @@ class Report(QWidget):
                 "Vendor Code",
                 "Unique No",
                 "Image",
+                "Front Image",
+                "Back Image",
                 "Status",
                 "Date",
                 "Time",
@@ -1215,28 +1205,39 @@ class Report(QWidget):
             self.table.insertRow(row)
             self.table.setRowHeight(row, 150)
 
+            # ---- TEXT COLUMNS ----
             for c in range(6):
-                item = QTableWidgetItem(str(r[c]))
-                item.setTextAlignment(Qt.AlignCenter)
-                self.table.setItem(row, c, item)
+                self.table.setItem(row, c, QTableWidgetItem(str(r[c])))
 
-            status_item = QTableWidgetItem(r[7])
+            # ---- STATUS ----
+            status_item = QTableWidgetItem(r[9])
             status_item.setTextAlignment(Qt.AlignCenter)
             status_item.setForeground(
-                QColor("green") if r[7] == "OK" else QColor("red")
+                QColor("green") if r[9] == "OK" else QColor("red")
             )
-            self.table.setItem(row, 7, status_item)
+            self.table.setItem(row, 9, status_item)
 
-            self.table.setItem(row, 8, QTableWidgetItem(r[8].strftime("%Y-%m-%d")))
-            self.table.setItem(row, 9, QTableWidgetItem(r[8].strftime("%H:%M:%S")))
+            # ---- DATE & TIME ----
+            if r[10]:
+                self.table.setItem(
+                    row, 10, QTableWidgetItem(r[10].strftime("%Y-%m-%d"))
+                )
+                self.table.setItem(
+                    row, 11, QTableWidgetItem(r[10].strftime("%H:%M:%S"))
+                )
 
-            QTimer.singleShot(10, lambda row=row, img=r[6]: self._set_image(row, img))
+            # ---- IMAGES ----
+            self._set_image(row, 6, r[6])  # main image
+            self._set_image(row, 7, r[7])  # front image
+            self._set_image(row, 8, r[8])  # back image
 
-        total_pages = max(1, (self.total_rows + self.page_size - 1) // self.page_size)
-        self.page_lbl.setText(f"Page {self.current_page} / {total_pages}")
+            total_pages = max(
+                1, (self.total_rows + self.page_size - 1) // self.page_size
+            )
+            self.page_lbl.setText(f"Page {self.current_page} / {total_pages}")
 
-        self.btn_prev.setEnabled(self.current_page > 1)
-        self.btn_next.setEnabled(self.current_page < total_pages)
+            self.btn_prev.setEnabled(self.current_page > 1)
+            self.btn_next.setEnabled(self.current_page < total_pages)
 
     def reset_and_load(self):
         self.current_page = 1
@@ -1251,18 +1252,33 @@ class Report(QWidget):
             self.current_page -= 1
             self.load()
 
-    def _set_image(self, row, img_bytes):
-        pix = QPixmap()
-        pix.loadFromData(bytes(img_bytes))
+    def show_image_dialog_pixmap(self, pix):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Image View")
+        dlg.resize(700, 700)
 
         lbl = QLabel(alignment=Qt.AlignCenter)
+        lbl.setPixmap(pix.scaled(680, 680, Qt.KeepAspectRatio))
+
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(lbl)
+        dlg.exec()
+
+    def _set_image(self, row, col, img):
+        if not img:
+            return
+
+        pix = QPixmap()
+        pix.loadFromData(bytes(img))
+
+        lbl = QLabel()
+        lbl.setAlignment(Qt.AlignCenter)
         lbl.setPixmap(pix.scaled(220, 130, Qt.KeepAspectRatio))
         lbl.setCursor(Qt.PointingHandCursor)
 
-        # 👇 THIS IS THE KEY LINE
-        lbl.mousePressEvent = lambda e, b=img_bytes: self.show_image_dialog(b)
+        lbl.mousePressEvent = lambda e, b=img: self.show_image_dialog(b)
 
-        self.table.setCellWidget(row, 6, lbl)
+        self.table.setCellWidget(row, col, lbl)
 
     def export_excel(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -1288,7 +1304,9 @@ class Report(QWidget):
             "Status",
             "Date",
             "Time",
-            "Image",
+            "ColorImage",
+            "Front_MpiImage",
+            "Back_MpiImage",
         ]
         ws.append(headers)
 
@@ -1312,10 +1330,12 @@ class Report(QWidget):
                     r[3],  # serial_no
                     r[4],  # vendor_code
                     r[5],  # batch
-                    r[7],  # status
-                    r[8].strftime("%Y-%m-%d"),
-                    r[8].strftime("%H:%M:%S"),
-                    "",    # placeholder for image
+                    r[9],  # status
+                    r[10].strftime("%Y-%m-%d"),
+                    r[10].strftime("%H:%M:%S"),
+                    "",  # Image
+                    "",  # Front Image
+                    "",  # Back Image
                 ]
             )
 
@@ -1347,7 +1367,6 @@ class Report(QWidget):
 
         TextToast("Excel exported with images", self).show_bottom()
 
-
     def show_image_dialog(self, img_bytes):
         dlg = QDialog(self)
         dlg.setWindowTitle("Image View")
@@ -1363,8 +1382,6 @@ class Report(QWidget):
         lay.addWidget(lbl)
 
         dlg.exec()
-
-
 
 
 # ================= MAIN =================
@@ -1412,10 +1429,6 @@ class Main(QWidget):
 
         # ---- Default page ----
         self.stack.setCurrentWidget(self.home)
-
-
-
-
 
     def go_home(self):
         self.operator.on_leave()
